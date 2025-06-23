@@ -1,11 +1,7 @@
 import json, os, time, requests
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from pymongo import MongoClient
-from mega import Mega
 
-
-CHROMEDRIVER_PATH = r"chromedriver"
 
 def get_total_episodes(anime_id):
     try:
@@ -29,13 +25,13 @@ def get_total_episodes(anime_id):
         if response.status_code == 200:
             data = response.json()
             print("✅ Fetched total episodes")
-            return data['data']['Media']['episodes']
+            return data['data']['Media']['episodes'], data['data']['Media']['title']['romaji']
         else:
             print(f"❌ Error fetching episodes: {response.status_code}")
-            return None
+            return None, None
     except Exception as e:
         print(f"❌ Exception in get_total_episodes: {e}")
-        return None
+        return None, None
 
 
 class WebDriverManager:
@@ -69,15 +65,17 @@ class WebDriverManager:
         self.driver.quit()
 
 
-def fetch_all_episode_urls(anime_id, index):
+def fetch_episode_data_for_single_anime(anime_id):
     try:
-        print("Fetching total episodes...")
-        total_episodes = get_total_episodes(anime_id)
+        print(f"🔍 Fetching data for anime ID: {anime_id}")
+        total_episodes, title = get_total_episodes(anime_id)
+
         if total_episodes is None:
-            print("⚠️ Episodes not found, skipping ID")
+            print("⚠️ Episodes not found, exiting.")
             return
 
-        print(f"📺 Total episodes: {total_episodes}")
+        print(f"📺 Anime: {title}")
+        print(f"🎞️ Total episodes: {total_episodes}\n")
 
         driver_manager = WebDriverManager()
         video_urls = []
@@ -85,9 +83,11 @@ def fetch_all_episode_urls(anime_id, index):
         for episode_num in range(1, total_episodes + 1):
             try:
                 episode_url = f"https://www.miruro.tv/watch?id={anime_id}&ep={episode_num}"
+                print(f"➡️ Episode {episode_num}: Checking URL {episode_url}")
                 video_src = driver_manager.get_video_url(episode_url)
 
                 if video_src:
+                    print(f"✅ Episode {episode_num} URL: {video_src}")
                     video_urls.append({"episode": episode_num, "video_url": video_src})
                 else:
                     print(f"⚠️ No video URL for episode {episode_num}")
@@ -96,114 +96,17 @@ def fetch_all_episode_urls(anime_id, index):
 
         driver_manager.close()
 
-        # Save data to JSON
-        json_folder = "json_files"
-        os.makedirs(json_folder, exist_ok=True)
-        json_path = os.path.join(json_folder, f"{anime_id}_data.json")
-
-        # try:
-        #     with open(json_path, "w", encoding="utf-8") as file:
-        #         json.dump(video_urls, file, indent=4)
-        #     print(f"✅ Saved: {json_path}")
-        # except Exception as write_err:
-        #     print(f"❌ Error writing JSON: {write_err}")
-        #     return
-
-        # Upload to Mega and save public link to DB
-        try:
-            # keys = os.getenv("M_TOKEN").split("_")
-            # mega = Mega()
-            # m = mega.login(keys[0], keys[1])
-            # file = m.upload(json_path)
-            # public_link = m.get_upload_link(file)
-            # print(f"✅ Uploaded to Mega: {public_link}")
-
-            mongo_url = os.getenv("MONGO_URL")
-            client = MongoClient(mongo_url)
-            db = client['miruai_tv_1']
-            cloud_coll = db['cloud_files']
-
-            cloud_coll.insert_one({
-                "filename": f"{anime_id}_data.json",
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "file_data": video_urls,
-                "message": "Data successfully uploaded"
-            })
-
-        except Exception as e:
-            print(f"❌ Upload or DB insert error: {e}")
-            try:
-                cloud_coll.insert_one({
-                    "filename": f"{anime_id}_data.json",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "message": "File upload failed"
-                })
-            except:
-                pass
-
-        # # Delete local file
-        # try:
-        #     os.remove(json_path)
-        #     print(f"🧹 Removed local file: {json_path}")
-        # except:
-        #     print(f"⚠️ Could not delete local file: {json_path}")
+        print("\n📦 All Episodes Data:")
+        print(json.dumps(video_urls, indent=2))
 
     except Exception as e:
-        print(f"❌ Unexpected error for anime_id {anime_id}: {e}")
+        print(f"❌ Unexpected error: {e}")
 
 
-def start():
-    json_folder = "json_files"
-    if not os.path.exists(json_folder):
-        os.makedirs(json_folder)
-
-    client = None
-    try:
-        mongo_url = os.getenv("MONGO_URL")
-        client = MongoClient(mongo_url)
-        db = client['miruai_tv_1']
-        collection = db['coll_1']
-
-        tracking_doc = collection.find_one({"id": "action_1"})
-        if tracking_doc is None:
-            print("Initializing tracking document...")
-            tracking_doc = {
-                "id": "action_1",
-                "start_id": 1,
-                "last_saved_timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }
-            collection.insert_one(tracking_doc)
-
-        start_id = tracking_doc["start_id"]
-        processed_count = 0
-
-        while True:
-            try:
-                print(f"\n🔄 Processing anime_id: {start_id}")
-                fetch_all_episode_urls(start_id, start_id)
-
-                collection.update_one(
-                    {"id": "action_1"},
-                    {
-                        "$set": {
-                            "start_id": start_id + 1,
-                            "last_saved_timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                        }
-                    }
-                )
-
-                processed_count += 1
-                start_id += 1
-
-            except Exception as loop_err:
-                print(f"❌ Error during anime_id {start_id}: {loop_err}")
-                time.sleep(2)
-                start_id += 1
-
-    finally:
-        if client:
-            client.close()
-
-
-# Run the script
-start()
+# === RUN ENTRY POINT ===
+if __name__ == "__main__":
+    anime_id_input =  '5680'
+    if anime_id_input.isdigit():
+        fetch_episode_data_for_single_anime(int(anime_id_input))
+    else:
+        print("❌ Invalid Anime ID.")
