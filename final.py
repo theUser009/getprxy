@@ -105,7 +105,7 @@ def fetch_episode_data_for_single_anime(anime_id):
 
 # === RUN ENTRY POINT ===
 if __name__ == "__main__":
-    anime_id_input =  '5680'
+    anime_id_input =  '7791'
     if anime_id_input.isdigit():
         fetch_episode_data_for_single_anime(int(anime_id_input))
     else:
